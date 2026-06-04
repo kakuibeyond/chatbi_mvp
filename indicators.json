@@ -1,0 +1,54 @@
+{
+  "indicators": [
+    {
+      "name": "收入",
+      "aliases": ["销售额", "营收", "销售收入"],
+      "definition": "不含税销售收入，财务口径的销售额",
+      "formula": "SUM(o.net_amount * r.rate_to_cny)",
+      "data_source": "sales_orders o JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency",
+      "depends_on": [],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "销售成本",
+      "aliases": ["成本", "销售成本"],
+      "definition": "已售产品的实际成本，等于材料成本加人工成本乘以数量",
+      "formula": "SUM((p.material_cost + p.labor_cost) * o.quantity)",
+      "data_source": "sales_orders o JOIN dim_products p ON o.product_id = p.product_id",
+      "depends_on": [],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "毛利",
+      "aliases": ["毛利润", "gross_profit"],
+      "definition": "销售收入减去销售成本",
+      "formula": "revenue - cost",
+      "data_source": "需同时关联 sales_orders、dim_products、exchange_rates",
+      "depends_on": ["收入", "销售成本"],
+      "time_field": "o.order_date",
+      "filters": ["o.order_status = 'completed'"]
+    },
+    {
+      "name": "期间费用",
+      "aliases": ["费用", "总费用"],
+      "definition": "企业日常经营发生的费用，包括研发、销售、管理、财务四大费用",
+      "formula": "SUM(rd_expense + selling_expense + admin_expense + finance_expense)",
+      "data_source": "finance_expenses",
+      "depends_on": [],
+      "time_field": "expense_date",
+      "filters": []
+    },
+    {
+      "name": "利润",
+      "aliases": ["净利润", "经营利润", "profit"],
+      "definition": "企业经营利润，等于毛利减去期间费用",
+      "formula": "gross_profit - total_expense",
+      "data_source": "需跨 sales_orders、dim_products、exchange_rates、finance_expenses",
+      "depends_on": ["毛利", "期间费用"],
+      "time_field": "o.order_date / expense_date",
+      "filters": ["o.order_status = 'completed'"]
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+[
+  {
+    "id": "S01",
+    "category": "simple",
+    "question": "查询已完成订单的总数量",
+    "expected_sql": "SELECT COUNT(*) AS order_count FROM sales_orders WHERE order_status = 'completed'",
+    "description": "单表聚合，基础过滤"
+  },
+  {
+    "id": "S02",
+    "category": "simple",
+    "question": "查询有多少种不同的产品线",
+    "expected_sql": "SELECT COUNT(DISTINCT product_line) AS product_line_count FROM dim_products",
+    "description": "单表去重计数"
+  },
+  {
+    "id": "S03",
+    "category": "simple",
+    "question": "查询2026年1月的总研发费用",
+    "expected_sql": "SELECT SUM(rd_expense) AS total_rd FROM finance_expenses WHERE expense_date >= '2026-01-01' AND expense_date < '2026-02-01'",
+    "description": "单表时间范围过滤+聚合"
+  },
+  {
+    "id": "M01",
+    "category": "medium",
+    "question": "按客户类型统计已完成订单的数量",
+    "expected_sql": "SELECT c.customer_type, COUNT(*) AS order_count FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE o.order_status = 'completed' GROUP BY c.customer_type",
+    "description": "两表Join+分组聚合+过滤"
+  },
+  {
+    "id": "M02",
+    "category": "medium",
+    "question": "按产品线统计总收入",
+    "expected_sql": "SELECT p.product_line, SUM(o.net_amount) AS total_revenue FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.product_line",
+    "description": "两表Join+收入聚合+过滤"
+  },
+  {
+    "id": "M03",
+    "category": "medium",
+    "question": "查询欧洲市场最近三个月的总收入",
+    "expected_sql": "SELECT SUM(o.net_amount) AS total_revenue FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id WHERE c.region = '欧洲' AND o.order_status = 'completed' AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)",
+    "description": "两表Join+地区过滤+时间过滤+收入聚合"
+  },
+  {
+    "id": "C01",
+    "category": "complex",
+    "question": "按大区统计本季度总收入（人民币口径）",
+    "expected_sql": "SELECT c.region, SUM(o.net_amount * r.rate_to_cny) AS total_revenue_cny FROM sales_orders o JOIN dim_customers c ON o.customer_id = c.customer_id JOIN exchange_rates r ON o.order_date = r.rate_date AND o.currency = r.currency WHERE o.order_status = 'completed' AND o.order_date >= '2026-04-01' AND o.order_date < '2026-07-01' GROUP BY c.region",
+    "description": "三表Join+汇率转换+时间范围+分组聚合"
+  },
+  {
+    "id": "C02",
+    "category": "complex",
+    "question": "按产品线统计平均客单价和订单数量",
+    "expected_sql": "SELECT p.product_line, AVG(o.net_amount) AS avg_order_value, COUNT(*) AS order_count FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' GROUP BY p.product_line",
+    "description": "两表Join+多聚合函数+分组"
+  },
+  {
+    "id": "C03",
+    "category": "complex",
+    "question": "查询上个月的销售额、销售成本及毛利",
+    "expected_sql": "SELECT SUM(o.net_amount) AS revenue, SUM((p.material_cost + p.labor_cost) * o.quantity) AS cost, SUM(o.net_amount) - SUM((p.material_cost + p.labor_cost) * o.quantity) AS gross_profit FROM sales_orders o JOIN dim_products p ON o.product_id = p.product_id WHERE o.order_status = 'completed' AND o.order_date >= DATE_FORMAT(DATE_SUB(CURDATE(), INTERVAL 1 MONTH), '%Y-%m-01') AND o.order_date < DATE_FORMAT(CURDATE(), '%Y-%m-01')",
+    "description": "两表Join+复杂计算字段+动态时间边界+多指标聚合"
+  }
+]
