@@ -23,6 +23,7 @@ class LLMClient:
             base_url=LLM_CONFIG["base_url"]
         )
         self.model = LLM_CONFIG["model"]
+        self.embedding_model = LLM_CONFIG["embedding_model"]
         self.temperature = LLM_CONFIG["temperature"]
         self.max_tokens = LLM_CONFIG["max_tokens"]
 
@@ -87,6 +88,27 @@ class LLMClient:
             if delta_content is not None:
                 yield delta_content
 
+    def get_embedding(self, text: str) -> list[float]:
+        """
+        调用 Embedding API 将文本转为向量
+
+        Args:
+            text: 需要向量化的文本
+
+        Returns:
+            浮点数列表，维度取决于所用模型（如 text-embedding-3-small 为 1536 维）
+        """
+        resp = self.client.embeddings.create(
+            model=self.embedding_model,
+            input=text,
+        )
+        # OpenAI 兼容接口返回按输入顺序的列表；这里只传了 1 条文本
+        embedding = resp.data[0].embedding
+        return embedding
+
+
 if __name__ == '__main__':
     llm = LLMClient()
-    print(llm.generate_sql(system_msg='你是一个 SQL 生成器', prompt="查询学生数量"))
+    vec = llm.get_embedding(text="你好")
+    print(f"向量维度: {len(vec)}")
+    print(f"前 5 个值: {vec[:5]}")

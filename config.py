@@ -26,6 +26,7 @@ LLM_CONFIG = {
     "api_key": os.getenv("OPENAI_API_KEY"),
     "base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
     "model": os.getenv("LLM_MODEL", "gpt-4"),
+    "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-large"),
     "temperature": 0.1,
     "max_tokens": 1000
 }
