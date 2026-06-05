@@ -5,9 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.136.0",
     "openai>=2.38.0",
+    "pydantic>=2.11.0",
     "pymysql>=1.2.0",
     "python-dotenv>=1.2.2",
+    "uvicorn>=0.35.0",
 ]
 
 [[tool.uv.index]]

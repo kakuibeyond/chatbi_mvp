@@ -12,7 +12,7 @@ from typing import Optional
 class ErrorAnalyzer:
     """SQL 生成错误分析器"""
 
-    # 错误类型常量11
+    # 错误类型常量
     FIELD_ERROR = "field_error"           # 字段选择错误
     JOIN_ERROR = "join_error"             # 关联路径错误
     TIME_ERROR = "time_error"             # 时间计算错误
