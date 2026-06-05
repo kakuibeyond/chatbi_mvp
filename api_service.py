@@ -36,7 +36,40 @@ logger = logging.getLogger("chatbi.api")
 app = FastAPI(
     title="ChatBI MVP API",
     version="0.2.0",
-    description="企业级 ChatBI MVP 的服务化接口，支持同步和 SSE 流式两种查询方式。"
+    description="""
+## ChatBI MVP API
+
+企业级 ChatBI 最小可行产品的服务化接口。
+
+### 接口概览
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/query` | POST | 同步查询，一次性返回完整结果 |
+| `/api/v1/query/stream` | POST | SSE 流式查询，逐步推送 SQL 和结果 |
+| `/health` | GET | 健康检查 |
+
+### SSE 流式接口事件类型
+
+`/api/v1/query/stream` 返回的事件类型：
+
+| 事件类型 | 说明 | data 结构 |
+|----------|------|-----------|
+| `sql_chunk` | SQL 文本片段，前端逐字拼接展示 | `{"content": "SELECT..."}` |
+| `sql_done` | SQL 完整输出，可复制或二次处理 | `{"sql": "SELECT COUNT(*)..."}` |
+| `result` | 查询结果 | `{"columns": [...], "rows": [...], "row_count": N}` |
+| `error` | 异常信息 | `{"error": "...", "error_type": "..."}` |
+
+### Apifox 导入方式
+
+1. 启动服务后访问 `http://localhost:8000/openapi.json`
+2. 在 Apifox 中选择「导入」→「URL 导入」→ 粘贴上面的地址
+3. 或直接复制 JSON 内容，选择「文件导入」
+""",
+    openapi_tags=[
+        {"name": "查询", "description": "自然语言转 SQL 查询接口"},
+        {"name": "系统", "description": "系统运维与监控接口"},
+    ],
 )
 system = ChatBISystem()
 
@@ -141,7 +174,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 
-@app.get("/")
+@app.get("/", tags=["系统"])
 def read_root() -> dict[str, str]:
     """服务说明入口"""
     return {
@@ -153,7 +186,7 @@ def read_root() -> dict[str, str]:
     }
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse, tags=["系统"])
 def health_check() -> HealthResponse:
     """检查 API 服务和数据库连通性"""
     return HealthResponse(
@@ -165,6 +198,8 @@ def health_check() -> HealthResponse:
 @app.post(
     "/api/v1/query",
     response_model=QuerySuccessResponse,
+    tags=["查询"],
+    summary="同步查询（一次性返回）",
     responses={
         400: {"model": ErrorResponse, "description": "输入问题不合法"},
         502: {"model": ErrorResponse, "description": "LLM 调用失败"},
@@ -211,7 +246,7 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
     )
 
 
-@app.post("/api/v1/query/stream")
+@app.post("/api/v1/query/stream", tags=["查询"], summary="SSE 流式查询（逐步推送）")
 async def query_chatbi_stream(payload: QueryRequest) -> StreamingResponse:
     """
     执行自然语言查询，以 SSE 流式返回结果

@@ -12,6 +12,7 @@
 import json
 import re
 import sys
+from decimal import Decimal
 from typing import Generator
 from config import LLM_CONFIG
 from indicator_knowledge import IndicatorKnowledge
@@ -184,10 +185,12 @@ class ChatBISystem:
             indicator_knowledge=indicator_block
         )
 
-        # 3. 流式生成 SQL —— 逐 chunk 推送
+        # 3. 流式生成 SQL —— 逐 chunk 推送（过滤空内容）
         sql_parts = []
         try:
             for chunk_text in self.llm.generate_sql_stream(system_msg, prompt):
+                if not chunk_text:
+                    continue  # 跳过空 chunk（部分模型会返回空字符串的 delta）
                 sql_parts.append(chunk_text)
                 yield _sse_event("sql_chunk", {"content": chunk_text})
         except Exception as e:
@@ -238,7 +241,14 @@ class ChatBISystem:
 
 def _sse_event(event_type: str, data: dict) -> str:
     """构造 SSE 格式的事件字符串"""
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, default=_json_serializer)}\n\n"
+
+
+def _json_serializer(obj):
+    """JSON 序列化补充：处理 Decimal 等非标准类型"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
 def main():
