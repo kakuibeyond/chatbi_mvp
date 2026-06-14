@@ -41,6 +41,23 @@ TABLE_DESCRIPTIONS = {
         "管理费用、财务费用，以及销售费用的子项（市场费用、物流费用、质保费用）。"
         "用于费用分析、利润计算（利润 = 毛利 - 期间费用）。"
     ),
+    "hr_attendance_records": (
+        "人力考勤表：记录员工每日上下班打卡、请假、加班、排班班次和异常考勤。"
+        "用于 HR 出勤统计、缺勤分析和薪资核算，不参与销售收入或产品利润分析。"
+    ),
+    "iot_device_alerts": (
+        "IoT 设备告警表：记录工厂设备、传感器、产线控制器上报的温度异常、"
+        "震动异常、离线告警和维护工单。用于设备运维监控与预测性维护，"
+        "不用于客户、订单、费用或汇率分析。"
+    ),
+    "legal_contract_archive": (
+        "法务合同档案表：存储合同编号、签署主体、法务审核意见、诉讼状态、"
+        "保密条款和履约风险评级。用于合同管理与法务合规，不用于销售分析。"
+    ),
+    "warehouse_temperature_logs": (
+        "仓储温湿度日志表：记录仓库各货位每小时温度、湿度、冷链设备状态和巡检结果。"
+        "用于仓储环境监控和质量追溯，不用于收入、毛利、客户或费用统计。"
+    ),
 }
 
 
@@ -113,9 +130,18 @@ def search_tables(
     scores.sort(key=lambda x: x[1], reverse=True)
     return scores[:top_k]
 
+def test_cosine_similarity():
+    vec_a = [1, 0, 0]
+    vec_b = [0, 1, 0]
+    vec_c = [3, 4, 0] # 3/5 = 0.6
+    # print(cosine_similarity(vec_a, vec_b)) # 0.0
+    print(cosine_similarity(vec_a, vec_c)) # 0.6
+    # print(cosine_similarity(vec_b, vec_c)) # 0.8
 
 # ==================== 5. 主程序：演示完整流程 ====================
 if __name__ == "__main__":
+    # test_cosine_similarity()
+    # pass
     # 初始化 LLM 客户端（复用项目已有的配置）
     client = LLMClient()
 
@@ -137,9 +163,9 @@ if __name__ == "__main__":
 
     for question in test_questions:
         print(f"\n问题：{question}")
-        results = search_tables(question, table_index, client, top_k=3)
+        results = search_tables(question, table_index, client, top_k=8)
         print("召回结果：")
         for table_name, score in results:
-            # 相似度 > 0.4 认为相关，用 ✓ 标记；否则用 · 标记
+            # 相似度 > 0.4 认为强相关，用 ✓ 标记；否则用 · 标记
             marker = "✓" if score > 0.4 else "·"
             print(f"  {marker} {table_name:20s} 相似度: {score:.4f}")
