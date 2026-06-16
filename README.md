@@ -1,3 +1,53 @@
+## 模块说明
+
+### 核心系统模块（第 6-12 课）
+
+| 模块 | 用途 | 关键接口 |
+|------|------|---------|
+| `config.py` | 集中管理数据库和 LLM API 配置 | `DB_CONFIG`、`LLM_CONFIG` |
+| `query_parser.py` | 用户输入校验 | `parse_query(question) → str` |
+| `prompt_builder.py` | Prompt 组装（Schema + Rules + Few-shot + 指标知识） | `build_prompt(question, ...) → (system_msg, prompt)` |
+| `llm_client.py` | LLM API 调用（同步/流式/Embedding） | `generate_sql()`、`generate_sql_stream()`、`get_embedding()` |
+| `database.py` | MySQL 连接与 SQL 执行 | `execute_sql(sql) → results` |
+| `result_formatter.py` | 结果格式化为表格/文本 | `format_result(results) → str` |
+| `main.py` | 系统主入口（CLI + ChatBISystem 类） | `ChatBISystem.run(question)`、`.run_stream(question)` |
+| `api_service.py` | FastAPI 服务（同步 + SSE 流式接口） | `POST /api/v1/query`、`POST /api/v1/query/stream` |
+| `schema_generator.py` | 从数据库 information_schema 自动提取表结构 | `generate_schema() → str` |
+
+### 错误分析与评估模块（第 7-8 课）
+
+| 模块 | 用途 | 运行方式 |
+|------|------|---------|
+| `error_analyzer.py` | SQL 错误分类（启发式规则 + LLM 分析） | `uv run error_analyzer.py` |
+| `evaluator.py` | Execution Accuracy + Exact Match 自动化评估 | `uv run evaluator.py` |
+| `test_cases.json` | 三层难度测试用例集 | 被 evaluator.py 读取 |
+
+### 指标知识模块（第 9 课）
+
+| 模块 | 用途 | 关键接口 |
+|------|------|---------|
+| `indicator_knowledge.py` | 指标识别（关键词匹配）与 Prompt 注入 | `build_knowledge_block(question) → str` |
+| `indicators.json` | 5 个核心指标定义（收入、成本、毛利、期间费用、利润） | JSON 格式 |
+
+### 向量检索与 Schema Linking 模块（第 14-16 课，第四阶段）
+
+| 模块 | 用途 | 关键接口 |
+|------|------|---------|
+| `vector_search_demo.py` | 手写向量检索演示 | `search_tables(query, index, client) → [(table, score)]` |
+| `table_retriever.py` | 表级召回（LangChain + ChromaDB 工程化版本） | `retrieve_tables(query, top_k, threshold) → [dict]`、`build_index()` |
+| `field_matcher.py` | 字段语义匹配（向量相似度 + 业务规则混合） | `match_fields(query, tables) → [dict]`、`retrieve_schema(query) → dict` |
+| `chroma_db/` | ChromaDB 持久化向量数据目录 | 自动管理，勿手动编辑 |
+
+### 历史脚本
+
+| 模块 | 用途 |
+|------|------|
+| `text2sql_v0.py` | 第 5 课：Zero-shot 单文件原型 |
+| `text2sql_v1.py` | 第 5 课：Few-shot 增强版本 |
+| `text2sql_v2.py` | 第 5 课：COT + 结构化约束版本 |
+
+---
+
 ## 开发环境说明
 - 本项目用 uv 作为 Python 环境管理工具
 
@@ -72,3 +122,9 @@ uv run <脚本名>.py
 - **脚本需可直接运行**：示例代码应确保复制到 `chatbi-mvp` 项目目录后，执行 `uv run <脚本>.py` 即可运行，不应依赖未声明的外部环境
 - **环境变量通过 .env 文件管理**：所有脚本统一使用 `python-dotenv` 自动加载项目根目录下的 `.env` 文件，不要在代码中硬写密钥，也不要依赖手动 `export` 环境变量。`.env` 文件不提交到 Git，通过 `.env.example` 提供模板
 - **避免全局 Python**：统一使用 `uv run` 运行脚本，不推荐直接调用系统全局 Python 或 `python <脚本>.py`
+
+### Git 提交规范
+
+- **每节课独立提交**：每节课的 code 代码在撰写完成、运行成功、测试没有问题之后，需要单独做一条 commit。commit message 格式为 `lesson-<课程序号>: <简述本课代码变更>`，例如 `lesson-14: 手写向量检索 demo（vector_search_demo.py）`
+- **可随时切换版本**：通过 `git log` 查看历史，可以随时 checkout 到任意一课完成时的代码状态，用于课前环境准备或复现演示
+- **不跨课混合提交**：即使两课的代码有依赖关系，也必须分开提交。前置课的代码先提交，后续课基于前置课的 commit 继续开发
