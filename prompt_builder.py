@@ -109,7 +109,8 @@ def build_prompt(
     use_few_shot: bool = True,
     use_rules: bool = False,
     use_guards: bool = False,
-    indicator_knowledge: str = ""
+    indicator_knowledge: str = "",
+    use_schema_linking: bool = False,
 ) -> tuple[str, str]:
     """
     构造发送给 LLM 的 Prompt
@@ -120,6 +121,9 @@ def build_prompt(
         use_rules: 是否注入业务规则层（第7课新增）
         use_guards: 是否注入错误防护层（第7课新增）
         indicator_knowledge: 指标知识文本块（第9课新增）
+        use_schema_linking: 是否使用动态 Schema Linking（第18课新增）
+                           为 True 时调用 schema_linker 动态生成精简 Schema，
+                           失败时自动回退到全量 Schema。
 
     Returns:
         (system_message, user_message)
@@ -128,8 +132,19 @@ def build_prompt(
     if use_rules or use_guards:
         system_msg = "你是一个专业的 SQL 生成助手，擅长根据业务问题生成标准 MySQL 查询语句。请严格遵守给定的业务规则，避免常见错误。"
 
+    # 第18课新增：动态 Schema Linking（失败时自动回退全量 Schema）
+    schema_text = SCHEMA
+    if use_schema_linking:
+        try:
+            from schema_linker import build_dynamic_prompt_schema
+            dynamic_schema = build_dynamic_prompt_schema(user_question)
+            if dynamic_schema:
+                schema_text = dynamic_schema
+        except Exception:
+            pass  # 回退到全量 SCHEMA
+
     prompt = f"""【数据库Schema】
-{SCHEMA}
+{schema_text}
 """
     if use_rules:
         prompt += f"""

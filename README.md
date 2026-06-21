@@ -29,13 +29,15 @@
 | `indicator_knowledge.py` | 指标识别（关键词匹配）与 Prompt 注入 | `build_knowledge_block(question) → str` |
 | `indicators.json` | 5 个核心指标定义（收入、成本、毛利、期间费用、利润） | JSON 格式 |
 
-### 向量检索与 Schema Linking 模块（第 14-16 课，第四阶段）
+### 向量检索与 Schema Linking 模块（第 14-18 课，第四阶段）
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|
 | `vector_search_demo.py` | 手写向量检索演示 | `search_tables(query, index, client) → [(table, score)]` |
 | `table_retriever.py` | 表级召回（LangChain + ChromaDB 工程化版本） | `retrieve_tables(query, top_k, threshold) → [dict]`、`build_index()` |
 | `field_matcher.py` | 字段语义匹配（向量相似度 + 业务规则混合） | `match_fields(query, tables) → [dict]`、`retrieve_schema(query) → dict` |
+| `join_resolver.py` | 多表 Join 路径自动推理（锚表选择 + BFS 图算法） | `select_anchor(query, candidate_tables) → (anchor, reason)`、`resolve_joins(anchor, target_tables) → dict` |
+| `schema_linker.py` | Schema Linking Pipeline 编排（串联表/字段/Join） | `schema_link(query) → dict`、`build_dynamic_prompt_schema(query) → str` |
 | `chroma_db/` | ChromaDB 持久化向量数据目录 | 自动管理，勿手动编辑 |
 
 ### 历史脚本
