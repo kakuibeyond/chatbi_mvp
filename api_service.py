@@ -93,6 +93,8 @@ class QueryRequest(BaseModel):
     use_rules: bool = Field(default=True, description="是否启用业务规则约束")
     use_guards: bool = Field(default=True, description="是否启用错误防护")
     use_indicator_knowledge: bool = Field(default=True, description="是否注入指标知识")
+    use_schema_linking: bool = Field(default=False, description="是否启用 Schema Linking")
+    use_indicator_rag: bool = Field(default=False, description="是否启用指标 RAG")
 
 
 class HealthResponse(BaseModel):
@@ -217,6 +219,8 @@ def query_chatbi(payload: QueryRequest) -> QuerySuccessResponse:
         use_rules=payload.use_rules,
         use_guards=payload.use_guards,
         use_indicator_knowledge=payload.use_indicator_knowledge,
+        use_schema_linking=payload.use_schema_linking,
+        use_indicator_rag=payload.use_indicator_rag,
     )
 
     duration_ms = round((perf_counter() - started_at) * 1000, 2)
@@ -270,6 +274,8 @@ async def query_chatbi_stream(payload: QueryRequest) -> StreamingResponse:
             use_rules=payload.use_rules,
             use_guards=payload.use_guards,
             use_indicator_knowledge=payload.use_indicator_knowledge,
+            use_schema_linking=payload.use_schema_linking,
+            use_indicator_rag=payload.use_indicator_rag,
         ):
             yield event_str
 

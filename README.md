@@ -10,8 +10,8 @@
 | `llm_client.py` | LLM API 调用（同步/流式/Embedding） | `generate_sql()`、`generate_sql_stream()`、`get_embedding()` |
 | `database.py` | MySQL 连接与 SQL 执行 | `execute_sql(sql) → results` |
 | `result_formatter.py` | 结果格式化为表格/文本 | `format_result(results) → str` |
-| `main.py` | 系统主入口（CLI + ChatBISystem 类） | `ChatBISystem.run(question)`、`.run_stream(question)` |
-| `api_service.py` | FastAPI 服务（同步 + SSE 流式接口） | `POST /api/v1/query`、`POST /api/v1/query/stream` |
+| `main.py` | 系统主入口（CLI + ChatBISystem 类） | `ChatBISystem.run(question)`、`.run_stream(question)`、内部统一走 `_resolve_indicator_context()` |
+| `api_service.py` | FastAPI 服务（同步 + SSE 流式接口） | `POST /api/v1/query`、`POST /api/v1/query/stream`，支持 `use_schema_linking` / `use_indicator_rag` 开关 |
 | `schema_generator.py` | 从数据库 information_schema 自动提取表结构 | `generate_schema() → str` |
 
 ### 错误分析与评估模块（第 7-8 课）
@@ -22,14 +22,16 @@
 | `evaluator.py` | Execution Accuracy + Exact Match 自动化评估 | `uv run evaluator.py` |
 | `test_cases.json` | 三层难度测试用例集 | 被 evaluator.py 读取 |
 
-### 指标知识模块（第 9 课）
+### 指标知识模块（第 9 课 + 第 19 课升级）
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|
-| `indicator_knowledge.py` | 指标识别（关键词匹配）与 Prompt 注入 | `build_knowledge_block(question) → str` |
-| `indicators.json` | 5 个核心指标定义（收入、成本、毛利、期间费用、利润） | JSON 格式 |
+| `indicator_knowledge.py` | 指标识别（关键词匹配，第 9 课原版） | `get_indicator_context(question) → {"detected_indicators", "indicator_block"}` |
+| `indicators.json` | 5 个核心指标定义（第 9 课原版） | JSON 格式 |
+| `indicator_retriever.py` | 指标 RAG 检索（语义检索，第 19 课升级版） | `retrieve_indicator_context(query) → {"detected_indicators", "indicator_block"}`、`retrieve_indicators(query) → [dict]` |
+| `indicators_full.json` | 13 个核心指标完整知识库（含分层、依赖链、SQL 模板） | JSON 格式 |
 
-### 向量检索与 Schema Linking 模块（第 14-18 课，第四阶段）
+### 向量检索与 Schema Linking 模块（第 14-20 课，第四阶段）
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|

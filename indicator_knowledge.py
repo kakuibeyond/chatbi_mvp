@@ -55,6 +55,10 @@ class IndicatorKnowledge:
     def build_knowledge_block(self, question: str) -> str:
         """根据用户问题构建指标知识文本块"""
         detected = self.detect_indicators(question)
+        return self.build_knowledge_block_from_detected(detected)
+
+    def build_knowledge_block_from_detected(self, detected: list[str]) -> str:
+        """基于已识别出的指标列表构建知识块，避免重复执行关键词扫描。"""
         if not detected:
             return ""
 
@@ -72,6 +76,14 @@ class IndicatorKnowledge:
                         blocks.append(self.get_indicator_text(dep))
                         injected.add(dep)
         return "\n\n".join(blocks)
+
+    def get_indicator_context(self, question: str) -> dict[str, list[str] | str]:
+        """一次关键词扫描同时返回识别结果和知识块，供主链路复用。"""
+        detected = self.detect_indicators(question)
+        return {
+            "detected_indicators": detected,
+            "indicator_block": self.build_knowledge_block_from_detected(detected),
+        }
 
 
 if __name__ == "__main__":
