@@ -14,6 +14,12 @@
 | `api_service.py` | FastAPI 服务（同步 + SSE 流式接口） | `POST /api/v1/query`、`POST /api/v1/query/stream`，支持 `use_schema_linking` / `use_indicator_rag` 开关 |
 | `schema_generator.py` | 从数据库 information_schema 自动提取表结构 | `generate_schema() → str` |
 
+### Agent 预备模块（第 22 课）
+
+| 模块 | 用途 | 关键接口 |
+|------|------|---------|
+| `query_decomposer.py` | 将复杂分析问题拆解为结构化子任务列表 | `build_decomposition_prompt(question) → (system_msg, prompt)`、`QueryDecomposer.decompose(question) → dict` |
+
 ### 错误分析与评估模块（第 7-8 课）
 
 | 模块 | 用途 | 运行方式 |
