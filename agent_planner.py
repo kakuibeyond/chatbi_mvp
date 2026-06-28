@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from decimal import Decimal
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
+import pymysql
 from pydantic import BaseModel, Field
 
+from config import DB_CONFIG
 from main import ChatBISystem
 from query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
 
@@ -50,9 +53,13 @@ class StepExecutionResult(BaseModel):
     task_id: str
     step_name: str
     success: bool
+    status: Literal["completed", "failed", "skipped"] = "completed"
+    attempts: int = 1
     question: str
     depends_on: list[str] = Field(default_factory=list)
     context_used: str = ""
+    storage_backend: str | None = None
+    result_reference: str | None = None
     sql: str | None = None
     columns: list[str] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)
@@ -67,6 +74,7 @@ class ExecutionSummary(BaseModel):
     analysis_goal: str
     completed_steps: int
     failed_steps: int
+    skipped_steps: int = 0
     key_findings: list[str] = Field(default_factory=list)
     summary_text: str
 
@@ -144,6 +152,160 @@ class PlanGenerator:
 StepRunner = Callable[[str], dict[str, Any]]
 
 
+class IntermediateResultStore:
+    """中间结果存储抽象。"""
+
+    def put(
+        self,
+        step_id: str,
+        columns: list[str],
+        rows: list[dict[str, Any]],
+    ) -> str:
+        raise NotImplementedError
+
+    def get(self, reference: str) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    def cleanup(self) -> None:
+        """释放临时资源。"""
+
+
+class MemoryResultStore(IntermediateResultStore):
+    """基于进程内字典的轻量存储。"""
+
+    def __init__(self):
+        self.data: dict[str, list[dict[str, Any]]] = {}
+
+    def put(
+        self,
+        step_id: str,
+        columns: list[str],
+        rows: list[dict[str, Any]],
+    ) -> str:
+        reference = f"memory://{step_id}"
+        self.data[reference] = rows
+        return reference
+
+    def get(self, reference: str) -> list[dict[str, Any]]:
+        return self.data.get(reference, [])
+
+    def cleanup(self) -> None:
+        self.data.clear()
+
+
+class TempTableResultStore(IntermediateResultStore):
+    """基于 MySQL 临时表的中间结果存储。"""
+
+    def __init__(
+        self,
+        connection_factory: Callable[[], Any] | None = None,
+    ):
+        self.connection_factory = connection_factory or (
+            lambda: pymysql.connect(**DB_CONFIG)
+        )
+        self.connection: Any | None = None
+        self.reference_to_table: dict[str, str] = {}
+
+    def put(
+        self,
+        step_id: str,
+        columns: list[str],
+        rows: list[dict[str, Any]],
+    ) -> str:
+        conn = self._ensure_connection()
+        table_name = f"tmp_agent_{self._sanitize_identifier(step_id)}"
+        table_columns = columns or (list(rows[0].keys()) if rows else ["_empty_marker"])
+        column_defs = ", ".join(
+            f"{self._quote_identifier(column)} {self._infer_sql_type([row.get(column) for row in rows])}"
+            for column in table_columns
+        )
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"DROP TEMPORARY TABLE IF EXISTS {self._quote_identifier(table_name)}"
+            )
+            cursor.execute(
+                f"CREATE TEMPORARY TABLE {self._quote_identifier(table_name)} ({column_defs})"
+            )
+            if rows:
+                placeholders = ", ".join(["%s"] * len(table_columns))
+                column_names = ", ".join(
+                    self._quote_identifier(column) for column in table_columns
+                )
+                values = [
+                    tuple(row.get(column) for column in table_columns)
+                    for row in rows
+                ]
+                cursor.executemany(
+                    f"INSERT INTO {self._quote_identifier(table_name)} ({column_names}) VALUES ({placeholders})",
+                    values,
+                )
+        conn.commit()
+
+        reference = f"temp_table://{table_name}"
+        self.reference_to_table[reference] = table_name
+        return reference
+
+    def get(self, reference: str) -> list[dict[str, Any]]:
+        conn = self._ensure_connection()
+        table_name = self.reference_to_table.get(reference) or self._parse_reference(reference)
+
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT * FROM {self._quote_identifier(table_name)}")
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+
+        return [dict(zip(columns, row)) for row in rows]
+
+    def cleanup(self) -> None:
+        if self.connection is None:
+            return
+
+        try:
+            with self.connection.cursor() as cursor:
+                for table_name in set(self.reference_to_table.values()):
+                    cursor.execute(
+                        f"DROP TEMPORARY TABLE IF EXISTS {self._quote_identifier(table_name)}"
+                    )
+            self.connection.commit()
+        finally:
+            self.connection.close()
+            self.connection = None
+            self.reference_to_table.clear()
+
+    def _ensure_connection(self) -> Any:
+        if self.connection is None or not getattr(self.connection, "open", True):
+            self.connection = self.connection_factory()
+        return self.connection
+
+    @staticmethod
+    def _sanitize_identifier(value: str) -> str:
+        sanitized = re.sub(r"[^0-9a-zA-Z_]", "_", value)
+        return sanitized.strip("_") or "step"
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        escaped = value.replace("`", "``")
+        return f"`{escaped}`"
+
+    @staticmethod
+    def _infer_sql_type(values: list[Any]) -> str:
+        non_null = next((value for value in values if value is not None), None)
+        if isinstance(non_null, bool):
+            return "TINYINT(1)"
+        if isinstance(non_null, int):
+            return "BIGINT"
+        if isinstance(non_null, (float, Decimal)):
+            return "DOUBLE"
+        return "TEXT"
+
+    @staticmethod
+    def _parse_reference(reference: str) -> str:
+        if not reference.startswith("temp_table://"):
+            raise ValueError(f"非法的临时表引用：{reference}")
+        return reference.split("://", 1)[1]
+
+
 class StepExecutor:
     """顺序执行计划中的每个步骤。"""
 
@@ -152,6 +314,11 @@ class StepExecutor:
         step_runner: StepRunner | None = None,
         chatbi_system: ChatBISystem | None = None,
         chatbi_run_options: dict[str, Any] | None = None,
+        max_retries: int = 0,
+        failure_policy: Literal["abort", "skip"] = "abort",
+        storage_backend: Literal["memory", "temp_table"] = "memory",
+        result_store: IntermediateResultStore | None = None,
+        storage_connection_factory: Callable[[], Any] | None = None,
     ):
         self.system = chatbi_system
         self.chatbi_run_options = chatbi_run_options or {
@@ -160,6 +327,18 @@ class StepExecutor:
             "use_indicator_knowledge": True,
         }
         self.step_runner = step_runner or self._run_with_chatbi
+        self.max_retries = max_retries
+        self.failure_policy = failure_policy
+        self.storage_backend = storage_backend
+        self.result_store = result_store or self._build_result_store(
+            storage_backend=storage_backend,
+            connection_factory=storage_connection_factory,
+        )
+        self.memory_store = (
+            self.result_store.data
+            if isinstance(self.result_store, MemoryResultStore)
+            else {}
+        )
 
     def execute_plan(
         self,
@@ -169,20 +348,47 @@ class StepExecutor:
         results: list[StepExecutionResult] = []
         results_by_step: dict[str, StepExecutionResult] = {}
         steps_to_run = plan.steps[:max_steps] if max_steps is not None else plan.steps
+        abort_triggered = False
 
         for step in steps_to_run:
+            if abort_triggered:
+                skipped = self._build_skipped_result(
+                    step=step,
+                    error="前序步骤失败，当前执行策略为 abort，后续步骤停止执行。",
+                )
+                results.append(skipped)
+                results_by_step[step.step_id] = skipped
+                continue
+
+            if self._has_failed_dependency(step.depends_on, results_by_step):
+                skipped = self._build_skipped_result(
+                    step=step,
+                    error="依赖步骤失败，当前步骤已跳过。",
+                )
+                results.append(skipped)
+                results_by_step[step.step_id] = skipped
+                continue
+
             dependency_context = self._build_dependency_context(
                 step.depends_on,
                 results_by_step,
             )
             composed_question = self._compose_question(step.question, dependency_context)
-            raw_result = self.step_runner(composed_question)
-            normalized = self._normalize_result(
+            normalized = self._execute_with_retry(
                 step=step,
                 question=composed_question,
                 context_used=dependency_context,
-                raw_result=raw_result,
             )
+            if normalized.success:
+                normalized.result_reference = self._store_intermediate_result(
+                    step.step_id,
+                    normalized.columns,
+                    normalized.rows,
+                )
+                normalized.storage_backend = self.storage_backend
+            elif self.failure_policy == "abort":
+                abort_triggered = True
+
             results.append(normalized)
             results_by_step[step.step_id] = normalized
 
@@ -197,6 +403,31 @@ class StepExecutor:
             **self.chatbi_run_options,
         )
 
+    def _execute_with_retry(
+        self,
+        step: PlanStep,
+        question: str,
+        context_used: str,
+    ) -> StepExecutionResult:
+        last_result: StepExecutionResult | None = None
+
+        for attempt in range(1, self.max_retries + 2):
+            raw_result = self.step_runner(question)
+            normalized = self._normalize_result(
+                step=step,
+                question=question,
+                context_used=context_used,
+                raw_result=raw_result,
+                attempts=attempt,
+                storage_backend=self.storage_backend,
+            )
+            if normalized.success:
+                return normalized
+            last_result = normalized
+
+        assert last_result is not None
+        return last_result
+
     @staticmethod
     def _compose_question(step_question: str, dependency_context: str) -> str:
         if not dependency_context:
@@ -207,8 +438,8 @@ class StepExecutor:
             f"{dependency_context}"
         )
 
-    @staticmethod
     def _build_dependency_context(
+        self,
         dependency_ids: list[str],
         results_by_step: dict[str, StepExecutionResult],
     ) -> str:
@@ -218,19 +449,27 @@ class StepExecutor:
         lines: list[str] = []
         for step_id in dependency_ids:
             result = results_by_step[step_id]
-            lines.append(
-                f"- {result.step_name}：{StepExecutor._pick_result_brief(result)}"
-            )
+            lines.append(f"- {result.step_name}：{self._pick_result_brief(result)}")
         return "\n".join(lines)
 
     @staticmethod
-    def _pick_result_brief(result: StepExecutionResult) -> str:
+    def _has_failed_dependency(
+        dependency_ids: list[str],
+        results_by_step: dict[str, StepExecutionResult],
+    ) -> bool:
+        return any(not results_by_step[step_id].success for step_id in dependency_ids)
+
+    def _pick_result_brief(self, result: StepExecutionResult) -> str:
         if not result.success:
             return f"执行失败，错误信息：{result.error or '未知错误'}"
 
         if result.formatted.strip():
             first_line = result.formatted.strip().splitlines()[0]
             return first_line[:120]
+
+        stored_rows = self.get_intermediate_result(result.result_reference)
+        if stored_rows:
+            return json.dumps(stored_rows[0], ensure_ascii=False)
 
         if result.rows:
             return json.dumps(result.rows[0], ensure_ascii=False)
@@ -243,6 +482,8 @@ class StepExecutor:
         question: str,
         context_used: str,
         raw_result: dict[str, Any],
+        attempts: int = 1,
+        storage_backend: str | None = None,
     ) -> StepExecutionResult:
         columns = raw_result.get("columns", [])
         rows = raw_result.get("results") or raw_result.get("rows") or []
@@ -257,14 +498,58 @@ class StepExecutor:
             task_id=step.task_id,
             step_name=step.step_name,
             success=raw_result.get("success", False),
+            status="completed" if raw_result.get("success", False) else "failed",
+            attempts=attempts,
             question=question,
             depends_on=step.depends_on,
             context_used=context_used,
+            storage_backend=storage_backend,
             sql=raw_result.get("sql"),
             columns=columns,
             rows=normalized_rows,
             formatted=raw_result.get("formatted", ""),
             error=raw_result.get("error"),
+        )
+
+    def _store_intermediate_result(
+        self,
+        step_id: str,
+        columns: list[str],
+        rows: list[dict[str, Any]],
+    ) -> str:
+        return self.result_store.put(step_id=step_id, columns=columns, rows=rows)
+
+    def get_intermediate_result(
+        self,
+        reference: str | None,
+    ) -> list[dict[str, Any]]:
+        if not reference:
+            return []
+        return self.result_store.get(reference)
+
+    def cleanup(self) -> None:
+        self.result_store.cleanup()
+
+    @staticmethod
+    def _build_result_store(
+        storage_backend: Literal["memory", "temp_table"],
+        connection_factory: Callable[[], Any] | None = None,
+    ) -> IntermediateResultStore:
+        if storage_backend == "temp_table":
+            return TempTableResultStore(connection_factory=connection_factory)
+        return MemoryResultStore()
+
+    @staticmethod
+    def _build_skipped_result(step: PlanStep, error: str) -> StepExecutionResult:
+        return StepExecutionResult(
+            step_id=step.step_id,
+            task_id=step.task_id,
+            step_name=step.step_name,
+            success=False,
+            status="skipped",
+            question=step.question,
+            depends_on=step.depends_on,
+            error=error,
         )
 
 
@@ -278,24 +563,27 @@ class ResultSummarizer:
         step_results: list[StepExecutionResult],
     ) -> ExecutionSummary:
         completed = [result for result in step_results if result.success]
-        failed = [result for result in step_results if not result.success]
+        failed = [result for result in step_results if result.status == "failed"]
+        skipped = [result for result in step_results if result.status == "skipped"]
 
         findings = [
-            f"{result.step_name}：{StepExecutor._pick_result_brief(result)}"
+            f"{result.step_name}：{self._pick_result_brief(result)}"
             for result in step_results
         ]
 
         if failed:
             summary_text = (
                 f"已完成 {len(completed)} 个步骤，"
-                f"失败 {len(failed)} 个步骤。"
+                f"失败 {len(failed)} 个步骤，"
+                f"跳过 {len(skipped)} 个步骤。"
                 "当前链路已经暴露出真实执行问题，"
                 "需要先修复失败步骤，再继续扩展中间结果管理与总结能力。"
             )
         else:
             summary_text = (
                 f"已完成 {len(completed)} 个步骤，"
-                f"失败 {len(failed)} 个步骤。"
+                f"失败 {len(failed)} 个步骤，"
+                f"跳过 {len(skipped)} 个步骤。"
                 "当前结果已经可以支撑后续的中间结果管理与最终报告生成。"
             )
 
@@ -304,10 +592,22 @@ class ResultSummarizer:
             analysis_goal=plan.analysis_goal,
             completed_steps=len(completed),
             failed_steps=len(failed),
+            skipped_steps=len(skipped),
             key_findings=findings,
             summary_text=summary_text,
         )
 
+    @staticmethod
+    def _pick_result_brief(result: StepExecutionResult) -> str:
+        if not result.success:
+            return f"执行失败，错误信息：{result.error or '未知错误'}"
+        if result.formatted.strip():
+            return result.formatted.strip().splitlines()[0][:120]
+        if result.rows:
+            return json.dumps(result.rows[0], ensure_ascii=False)
+        if result.result_reference:
+            return f"结果已写入 {result.result_reference}"
+        return "步骤执行成功，但当前无返回行。"
 
 class PlanAndExecuteAgent:
     """Plan-and-Execute Agent 总入口。"""
@@ -375,6 +675,24 @@ def main() -> None:
         action="store_true",
         help="执行步骤时关闭指标 RAG，避免额外检索链路干扰验证。",
     )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=0,
+        help="单步执行失败后的最大重试次数。",
+    )
+    parser.add_argument(
+        "--failure-policy",
+        choices=["abort", "skip"],
+        default="abort",
+        help="步骤失败后如何处理后续链路。",
+    )
+    parser.add_argument(
+        "--storage-backend",
+        choices=["memory", "temp_table"],
+        default="memory",
+        help="中间结果引用方式。",
+    )
     args = parser.parse_args()
 
     if args.plan_only:
@@ -393,7 +711,10 @@ def main() -> None:
                 "use_schema_linking": not args.disable_schema_linking,
                 "use_indicator_rag": not args.disable_indicator_rag,
                 "use_indicator_knowledge": True,
-            }
+            },
+            max_retries=args.max_retries,
+            failure_policy=args.failure_policy,
+            storage_backend=args.storage_backend,
         )
         agent = PlanAndExecuteAgent(executor=executor)
         result = agent.run(args.question, max_steps=args.max_steps)
