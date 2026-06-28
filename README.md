@@ -20,6 +20,13 @@
 |------|------|---------|
 | `query_decomposer.py` | 将复杂分析问题拆解为结构化子任务列表 | `build_decomposition_prompt(question) → (system_msg, prompt)`、`QueryDecomposer.decompose(question) → dict` |
 
+### Agent 执行骨架（第 23 课）
+
+| 模块 | 用途 | 关键接口 |
+|------|------|---------|
+| `agent_planner.py` | 实现 Plan Generator、Step Executor、Result Summarizer，并串成最小版 Plan-and-Execute Agent | `PlanGenerator.build_plan()`、`StepExecutor.execute_plan()`、`PlanAndExecuteAgent.run()`、`uv run agent_planner.py --plan-only`、`uv run agent_planner.py --max-steps 1 --disable-schema-linking --disable-indicator-rag` |
+| `tests/test_agent_planner.py` | 验证计划生成、依赖上下文拼接、执行摘要输出 | `uv run pytest tests/test_agent_planner.py` |
+
 ### 错误分析与评估模块（第 7-8 课）
 
 | 模块 | 用途 | 运行方式 |
