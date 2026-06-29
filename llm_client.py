@@ -38,6 +38,24 @@ class LLMClient:
         Returns:
             提取后的纯 SQL 字符串
         """
+        raw_output = self.generate_text(system_msg=system_msg, prompt=prompt)
+
+        # 提取 SQL：去除 markdown 代码块标记
+        sql = re.sub(r'```sql|```', '', raw_output).strip()
+
+        return sql
+
+    def generate_text(self, system_msg: str, prompt: str) -> str:
+        """
+        调用 LLM 生成普通文本（同步，一次性返回）
+
+        Args:
+            system_msg: 系统角色消息
+            prompt: 完整的用户 Prompt
+
+        Returns:
+            模型返回的原始文本内容
+        """
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -47,13 +65,7 @@ class LLMClient:
             temperature=self.temperature,
             max_tokens=self.max_tokens
         )
-
-        raw_output = response.choices[0].message.content.strip()
-
-        # 提取 SQL：去除 markdown 代码块标记
-        sql = re.sub(r'```sql|```', '', raw_output).strip()
-
-        return sql
+        return response.choices[0].message.content.strip()
 
     def generate_sql_stream(self, system_msg: str, prompt: str) -> Generator[str, None, None]:
         """

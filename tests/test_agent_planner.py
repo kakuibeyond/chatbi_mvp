@@ -11,6 +11,7 @@ from agent_planner import (
     StepExecutor,
     TempTableResultStore,
 )
+from report_generator import ReportGenerator
 
 
 class FakeTempCursor:
@@ -188,6 +189,47 @@ def test_agent_returns_summary_after_execution():
     assert result["summary"]["failed_steps"] == 0
     assert len(result["summary"]["key_findings"]) == 3
     assert result["plan"]["steps"][2]["depends_on"] == ["step_2"]
+
+
+def test_agent_returns_business_report_after_execution():
+    decomposition = sample_decomposition()
+
+    def fake_runner(question: str) -> dict:
+        return {
+            "success": True,
+            "sql": "SELECT 1",
+            "columns": ["value"],
+            "rows": [{"value": 1}],
+            "formatted": f"已执行：{question.splitlines()[0]}",
+        }
+
+    report_generator = ReportGenerator(
+        text_generator=lambda _system_msg, _prompt: """
+        {
+          "title": "利润下降分析报告",
+          "executive_summary": "利润下降主要来自收入回落。",
+          "key_findings": ["最近一个月利润明显走低。"],
+          "root_causes": ["收入下降快于成本下降。"],
+          "trend_judgment": "短期仍需跟踪。",
+          "action_suggestions": ["继续观察核心产品线订单恢复情况。"]
+        }
+        """
+    )
+
+    agent = PlanAndExecuteAgent(
+        planner=PlanGenerator(),
+        executor=StepExecutor(step_runner=fake_runner),
+        summarizer=ResultSummarizer(),
+        report_generator=report_generator,
+    )
+
+    result = agent.run(
+        "最近三个月利润为什么下降？",
+        decomposition_override=decomposition,
+    )
+
+    assert result["report"]["title"] == "利润下降分析报告"
+    assert "## 关键发现" in result["report"]["markdown"]
 
 
 def test_step_executor_retries_failed_step_and_records_result_reference():

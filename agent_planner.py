@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from config import DB_CONFIG
 from main import ChatBISystem
 from query_decomposer import DecompositionPlan, DecomposedTask, QueryDecomposer
+from report_generator import ReportGenerator
 
 
 class PlanStep(BaseModel):
@@ -618,11 +619,13 @@ class PlanAndExecuteAgent:
         planner: PlanGenerator | None = None,
         executor: StepExecutor | None = None,
         summarizer: ResultSummarizer | None = None,
+        report_generator: ReportGenerator | None = None,
     ):
         self.decomposer = decomposer or QueryDecomposer()
         self.planner = planner or PlanGenerator()
         self.executor = executor or StepExecutor()
         self.summarizer = summarizer or ResultSummarizer()
+        self.report_generator = report_generator or ReportGenerator()
 
     def run(
         self,
@@ -634,6 +637,12 @@ class PlanAndExecuteAgent:
         plan = self.planner.build_plan(user_question, decomposition)
         step_results = self.executor.execute_plan(plan, max_steps=max_steps)
         summary = self.summarizer.summarize(user_question, plan, step_results)
+        report = self.report_generator.generate(
+            original_question=user_question,
+            analysis_goal=plan.analysis_goal,
+            step_results=[result.model_dump() for result in step_results],
+            summary=summary.model_dump(),
+        )
 
         return {
             "original_question": user_question,
@@ -641,6 +650,7 @@ class PlanAndExecuteAgent:
             "plan": plan.model_dump(),
             "step_results": [result.model_dump() for result in step_results],
             "summary": summary.model_dump(),
+            "report": report.model_dump(),
         }
 
 

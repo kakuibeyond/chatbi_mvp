@@ -7,7 +7,7 @@
 | `config.py` | 集中管理数据库和 LLM API 配置 | `DB_CONFIG`、`LLM_CONFIG` |
 | `query_parser.py` | 用户输入校验 | `parse_query(question) → str` |
 | `prompt_builder.py` | Prompt 组装（Schema + Rules + Few-shot + 指标知识） | `build_prompt(question, ...) → (system_msg, prompt)` |
-| `llm_client.py` | LLM API 调用（同步/流式/Embedding） | `generate_sql()`、`generate_sql_stream()`、`get_embedding()` |
+| `llm_client.py` | LLM API 调用（同步文本/SQL、流式、Embedding） | `generate_text()`、`generate_sql()`、`generate_sql_stream()`、`get_embedding()` |
 | `database.py` | MySQL 连接与 SQL 执行 | `execute_sql(sql) → results` |
 | `result_formatter.py` | 结果格式化为表格/文本 | `format_result(results) → str` |
 | `main.py` | 系统主入口（CLI + ChatBISystem 类） | `ChatBISystem.run(question)`、`.run_stream(question)`、内部统一走 `_resolve_indicator_context()` |
@@ -20,12 +20,14 @@
 |------|------|---------|
 | `query_decomposer.py` | 将复杂分析问题拆解为结构化子任务列表 | `build_decomposition_prompt(question) → (system_msg, prompt)`、`QueryDecomposer.decompose(question) → dict` |
 
-### Agent 执行主链（第 23-24 课）
+### Agent 执行主链（第 23-25 课）
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|
-| `agent_planner.py` | 实现 Plan Generator、Step Executor、Result Summarizer，并串成可运行的 Plan-and-Execute Agent；第 24 课补充中间结果引用、重试、失败跳过、执行状态跟踪，以及 `memory / temp_table` 两种真实存储后端 | `PlanGenerator.build_plan()`、`StepExecutor.execute_plan()`、`PlanAndExecuteAgent.run()`、`uv run agent_planner.py --plan-only`、`uv run agent_planner.py --max-retries 1 --failure-policy skip --storage-backend temp_table` |
-| `tests/test_agent_planner.py` | 验证计划生成、依赖上下文拼接、执行摘要输出，以及第 24 课新增的重试 / 跳过 / 状态记录 / temp table 存储 | `uv run pytest tests/test_agent_planner.py` |
+| `agent_planner.py` | 实现 Plan Generator、Step Executor、Result Summarizer，并串成可运行的 Plan-and-Execute Agent；第 24 课补充中间结果引用、重试、失败跳过、执行状态跟踪，第 25 课新增 `report` 输出并接入 `ReportGenerator` | `PlanGenerator.build_plan()`、`StepExecutor.execute_plan()`、`PlanAndExecuteAgent.run()`、`uv run agent_planner.py --plan-only`、`uv run agent_planner.py --max-retries 1 --failure-policy skip --storage-backend temp_table` |
+| `report_generator.py` | 把多步执行结果整理为结构化分析报告；优先走 LLM 结构化 JSON，再渲染 Markdown，格式异常时回退模板化报告 | `ReportGenerator.generate()`、`AnalysisReport` |
+| `tests/test_agent_planner.py` | 验证计划生成、依赖上下文拼接、执行摘要输出，以及第 24-25 课新增的重试 / 跳过 / 状态记录 / temp table 存储 / report 输出 | `uv run pytest tests/test_agent_planner.py` |
+| `tests/test_report_generator.py` | 验证报告解析与模板回退逻辑 | `uv run pytest tests/test_report_generator.py` |
 
 ### 错误分析与评估模块（第 7-8 课）
 
