@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Callable, Literal
 
@@ -135,6 +137,7 @@ class PlanGenerator:
             lines.append(f"关注指标：{'、'.join(task.metrics)}")
         if task.dimensions:
             lines.append(f"分析维度：{'、'.join(task.dimensions)}")
+        lines.append("执行约束：本步骤只回答当前子任务，优先生成一条结构清晰、易执行的 SQL。")
         lines.append("请优先返回支撑后续分析的查询结果，不要直接跳到最终归因结论。")
         return "\n".join(lines)
 
@@ -151,6 +154,11 @@ class PlanGenerator:
 
 
 StepRunner = Callable[[str], dict[str, Any]]
+
+def _print_progress(message: str) -> None:
+    """直接打印主链路进度日志。"""
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    print(f"[{timestamp}] {message}", file=sys.stderr, flush=True)
 
 
 class IntermediateResultStore:
@@ -350,9 +358,15 @@ class StepExecutor:
         results_by_step: dict[str, StepExecutionResult] = {}
         steps_to_run = plan.steps[:max_steps] if max_steps is not None else plan.steps
         abort_triggered = False
+        total_steps = len(steps_to_run)
 
-        for step in steps_to_run:
+        _print_progress(f"开始执行计划，共 {total_steps} 个步骤。")
+
+        for index, step in enumerate(steps_to_run, start=1):
             if abort_triggered:
+                _print_progress(
+                    f"{step.step_id} 已跳过：前序步骤失败，当前执行策略为 abort。"
+                )
                 skipped = self._build_skipped_result(
                     step=step,
                     error="前序步骤失败，当前执行策略为 abort，后续步骤停止执行。",
@@ -362,6 +376,9 @@ class StepExecutor:
                 continue
 
             if self._has_failed_dependency(step.depends_on, results_by_step):
+                _print_progress(
+                    f"{step.step_id} 已跳过：依赖步骤失败。"
+                )
                 skipped = self._build_skipped_result(
                     step=step,
                     error="依赖步骤失败，当前步骤已跳过。",
@@ -370,6 +387,9 @@ class StepExecutor:
                 results_by_step[step.step_id] = skipped
                 continue
 
+            _print_progress(
+                f"开始执行 {step.step_id}（{index}/{total_steps}）：{step.step_name}"
+            )
             dependency_context = self._build_dependency_context(
                 step.depends_on,
                 results_by_step,
@@ -387,12 +407,28 @@ class StepExecutor:
                     normalized.rows,
                 )
                 normalized.storage_backend = self.storage_backend
+                _print_progress(
+                    f"{step.step_id} 执行完成：{step.step_name}"
+                )
             elif self.failure_policy == "abort":
+                _print_progress(
+                    f"{step.step_id} 执行失败：{normalized.error or '未知错误'}"
+                )
                 abort_triggered = True
+            else:
+                _print_progress(
+                    f"{step.step_id} 执行失败：{normalized.error or '未知错误'}"
+                )
 
             results.append(normalized)
             results_by_step[step.step_id] = normalized
 
+        completed_steps = sum(1 for result in results if result.status == "completed")
+        failed_steps = sum(1 for result in results if result.status == "failed")
+        skipped_steps = sum(1 for result in results if result.status == "skipped")
+        _print_progress(
+            f"执行计划结束：completed={completed_steps}, failed={failed_steps}, skipped={skipped_steps}"
+        )
         return results
 
     def _run_with_chatbi(self, question: str) -> dict[str, Any]:
@@ -413,6 +449,10 @@ class StepExecutor:
         last_result: StepExecutionResult | None = None
 
         for attempt in range(1, self.max_retries + 2):
+            if attempt > 1:
+                _print_progress(
+                    f"{step.step_id} 开始第 {attempt} 次尝试：{step.step_name}"
+                )
             raw_result = self.step_runner(question)
             normalized = self._normalize_result(
                 step=step,
@@ -450,7 +490,15 @@ class StepExecutor:
         lines: list[str] = []
         for step_id in dependency_ids:
             result = results_by_step[step_id]
-            lines.append(f"- {result.step_name}：{self._pick_result_brief(result)}")
+            rows = result.rows or self.get_intermediate_result(result.result_reference)
+            payload = {
+                "step_id": result.step_id,
+                "step_name": result.step_name,
+                "columns": result.columns,
+                "rows": rows,
+                "result_reference": result.result_reference,
+            }
+            lines.append(json.dumps(payload, ensure_ascii=False, default=str))
         return "\n".join(lines)
 
     @staticmethod
@@ -464,9 +512,18 @@ class StepExecutor:
         if not result.success:
             return f"执行失败，错误信息：{result.error or '未知错误'}"
 
+        if result.formatted.strip() and not self._looks_like_table(result.formatted):
+            meaningful_line = self._pick_meaningful_formatted_line(result.formatted)
+            if meaningful_line:
+                return meaningful_line
+
+        if result.rows:
+            return self._summarize_rows(result.rows)
+
         if result.formatted.strip():
-            first_line = result.formatted.strip().splitlines()[0]
-            return first_line[:120]
+            meaningful_line = self._pick_meaningful_formatted_line(result.formatted)
+            if meaningful_line:
+                return meaningful_line
 
         stored_rows = self.get_intermediate_result(result.result_reference)
         if stored_rows:
@@ -476,6 +533,32 @@ class StepExecutor:
             return json.dumps(result.rows[0], ensure_ascii=False)
 
         return "步骤执行成功，但当前无返回行。"
+
+    @staticmethod
+    def _summarize_rows(rows: list[dict[str, Any]]) -> str:
+        first_row = rows[0]
+        parts = [
+            f"{key}={value}"
+            for key, value in first_row.items()
+            if value is not None
+        ]
+        return "，".join(parts[:4])[:120]
+
+    @staticmethod
+    def _pick_meaningful_formatted_line(formatted: str) -> str:
+        for line in formatted.strip().splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if set(stripped) <= {"-", "+"}:
+                continue
+            return stripped[:120]
+        return ""
+
+    @staticmethod
+    def _looks_like_table(formatted: str) -> bool:
+        text = formatted.strip()
+        return "+" in text and "|" in text
 
     @staticmethod
     def _normalize_result(
@@ -602,13 +685,40 @@ class ResultSummarizer:
     def _pick_result_brief(result: StepExecutionResult) -> str:
         if not result.success:
             return f"执行失败，错误信息：{result.error or '未知错误'}"
+        if result.formatted.strip() and not ResultSummarizer._looks_like_table(result.formatted):
+            for line in result.formatted.strip().splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if set(stripped) <= {"-", "+"}:
+                    continue
+                return stripped[:120]
+        if result.rows:
+            first_row = result.rows[0]
+            parts = [
+                f"{key}={value}"
+                for key, value in first_row.items()
+                if value is not None
+            ]
+            return "，".join(parts[:4])[:120]
         if result.formatted.strip():
-            return result.formatted.strip().splitlines()[0][:120]
+            for line in result.formatted.strip().splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if set(stripped) <= {"-", "+"}:
+                    continue
+                return stripped[:120]
         if result.rows:
             return json.dumps(result.rows[0], ensure_ascii=False)
         if result.result_reference:
             return f"结果已写入 {result.result_reference}"
         return "步骤执行成功，但当前无返回行。"
+
+    @staticmethod
+    def _looks_like_table(formatted: str) -> bool:
+        text = formatted.strip()
+        return "+" in text and "|" in text
 
 class PlanAndExecuteAgent:
     """Plan-and-Execute Agent 总入口。"""
@@ -633,16 +743,31 @@ class PlanAndExecuteAgent:
         decomposition_override: dict[str, Any] | None = None,
         max_steps: int | None = None,
     ) -> dict[str, Any]:
-        decomposition = decomposition_override or self.decomposer.decompose(user_question)
+        if decomposition_override is not None:
+            _print_progress("使用传入的拆解结果，跳过任务拆解。")
+            decomposition = decomposition_override
+        else:
+            _print_progress("开始任务拆解。")
+            decomposition = self.decomposer.decompose(user_question)
+            _print_progress(
+                f"任务拆解完成，共 {len(decomposition.get('subtasks', []))} 个子任务。"
+            )
+
+        _print_progress("开始生成执行计划。")
         plan = self.planner.build_plan(user_question, decomposition)
+        _print_progress(f"执行计划生成完成，共 {len(plan.steps)} 个步骤。")
         step_results = self.executor.execute_plan(plan, max_steps=max_steps)
+        _print_progress("开始生成执行摘要。")
         summary = self.summarizer.summarize(user_question, plan, step_results)
+        _print_progress("执行摘要生成完成。")
+        _print_progress("开始生成分析报告。")
         report = self.report_generator.generate(
             original_question=user_question,
             analysis_goal=plan.analysis_goal,
             step_results=[result.model_dump() for result in step_results],
             summary=summary.model_dump(),
         )
+        _print_progress("分析报告生成完成。")
 
         return {
             "original_question": user_question,
@@ -706,10 +831,16 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.plan_only:
+        _print_progress("开始任务拆解。")
         decomposer = QueryDecomposer()
         planner = PlanGenerator()
         decomposition = decomposer.decompose(args.question)
+        _print_progress(
+            f"任务拆解完成，共 {len(decomposition.get('subtasks', []))} 个子任务。"
+        )
+        _print_progress("开始生成执行计划。")
         plan = planner.build_plan(args.question, decomposition)
+        _print_progress(f"执行计划生成完成，共 {len(plan.steps)} 个步骤。")
         result = {
             "original_question": args.question,
             "decomposition": decomposition,

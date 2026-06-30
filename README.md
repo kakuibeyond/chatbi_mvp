@@ -18,16 +18,18 @@
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|
-| `query_decomposer.py` | 将复杂分析问题拆解为结构化子任务列表 | `build_decomposition_prompt(question) → (system_msg, prompt)`、`QueryDecomposer.decompose(question) → dict` |
+| `query_decomposer.py` | 将复杂分析问题拆解为结构化子任务列表；当前会把数据库 Schema、可用分析维度和可用指标注入拆解 Prompt，并在解析后校验维度合法性、任务复杂度，必要时自动重试一次 | `build_decomposition_prompt(question) → (system_msg, prompt)`、`QueryDecomposer.decompose(question) → dict` |
 
 ### Agent 执行主链（第 23-25 课）
 
 | 模块 | 用途 | 关键接口 |
 |------|------|---------|
-| `agent_planner.py` | 实现 Plan Generator、Step Executor、Result Summarizer，并串成可运行的 Plan-and-Execute Agent；第 24 课补充中间结果引用、重试、失败跳过、执行状态跟踪，第 25 课新增 `report` 输出并接入 `ReportGenerator` | `PlanGenerator.build_plan()`、`StepExecutor.execute_plan()`、`PlanAndExecuteAgent.run()`、`uv run agent_planner.py --plan-only`、`uv run agent_planner.py --max-retries 1 --failure-policy skip --storage-backend temp_table` |
+| `agent_planner.py` | 实现 Plan Generator、Step Executor、Result Summarizer，并串成可运行的 Plan-and-Execute Agent；第 24 课补充中间结果引用、重试、失败跳过、执行状态跟踪，第 25 课新增 `report` 输出并接入 `ReportGenerator`。当前 CLI 会把主链路进度日志输出到终端 `stderr`，便于观察任务执行到哪一步 | `PlanGenerator.build_plan()`、`StepExecutor.execute_plan()`、`PlanAndExecuteAgent.run()`、`uv run agent_planner.py --plan-only`、`uv run agent_planner.py --max-retries 1 --failure-policy skip --storage-backend temp_table` |
 | `report_generator.py` | 把多步执行结果整理为结构化分析报告；优先走 LLM 结构化 JSON，再渲染 Markdown，格式异常时回退模板化报告 | `ReportGenerator.generate()`、`AnalysisReport` |
 | `tests/test_agent_planner.py` | 验证计划生成、依赖上下文拼接、执行摘要输出，以及第 24-25 课新增的重试 / 跳过 / 状态记录 / temp table 存储 / report 输出 | `uv run pytest tests/test_agent_planner.py` |
 | `tests/test_report_generator.py` | 验证报告解析与模板回退逻辑 | `uv run pytest tests/test_report_generator.py` |
+| `tests/test_query_decomposer.py` | 验证 Schema / 指标注入、维度合法性校验，以及复杂度超标后的自动重试 | `uv run pytest tests/test_query_decomposer.py` |
+| `tests/test_prompt_and_config.py` | 验证“最近 N 个月”仍按 `CURDATE()` 规则处理，以及长 SQL 输出 token 上限 | `uv run pytest tests/test_prompt_and_config.py` |
 
 ### 错误分析与评估模块（第 7-8 课）
 
@@ -141,6 +143,23 @@ uv run <脚本名>.py
 - **脚本需可直接运行**：示例代码应确保复制到 `chatbi-mvp` 项目目录后，执行 `uv run <脚本>.py` 即可运行，不应依赖未声明的外部环境
 - **环境变量通过 .env 文件管理**：所有脚本统一使用 `python-dotenv` 自动加载项目根目录下的 `.env` 文件，不要在代码中硬写密钥，也不要依赖手动 `export` 环境变量。`.env` 文件不提交到 Git，通过 `.env.example` 提供模板
 - **避免全局 Python**：统一使用 `uv run` 运行脚本，不推荐直接调用系统全局 Python 或 `python <脚本>.py`
+
+### 当前 Agent 真实运行验证
+
+围绕 Agent 真实运行，当前代码已补齐以下保护：
+
+- Query Decomposer 会显式注入数据库 Schema、可用维度和指标目录，避免无约束拆解
+- Query Decomposer 会校验拆解结果中的维度是否合法，并对任务数过多的趋势/诊断类问题自动重试一次
+- Step Executor 传给下游步骤的是结构化前置结果 JSON，不再把展示层表格摘要当作模型输入
+- `LLM_MAX_TOKENS` 默认提升到 `4000`，降低长 SQL 被截断的风险
+
+真实验证方式：
+
+```bash
+cd code/chatbi_mvp
+uv run pytest -q
+uv run python agent_planner.py "分析近半年的利润变化情况"
+```
 
 ### Git 提交规范
 

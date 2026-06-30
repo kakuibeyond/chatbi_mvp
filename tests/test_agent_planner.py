@@ -162,6 +162,42 @@ def test_step_executor_passes_dependency_context_to_later_steps():
     assert "拆解收入与成本变化" in captured_questions[2]
 
 
+def test_step_executor_dependency_context_uses_structured_rows_instead_of_table_border():
+    decomposition = sample_decomposition()
+    plan = PlanGenerator().build_plan("最近三个月利润为什么下降？", decomposition)
+    captured_questions: list[str] = []
+
+    def fake_runner(question: str) -> dict:
+        captured_questions.append(question)
+        if len(captured_questions) == 1:
+            return {
+                "success": True,
+                "sql": "SELECT month, profit FROM monthly_profit",
+                "columns": ["month", "profit"],
+                "rows": [{"month": "2026-04-01", "profit": -1886156}],
+                "formatted": (
+                    "------------+------------\n"
+                    "month       |profit      \n"
+                    "------------+------------\n"
+                    "2026-04-01  |-1886156    \n"
+                    "------------+------------"
+                ),
+            }
+        return {
+            "success": True,
+            "sql": "SELECT 1",
+            "columns": ["value"],
+            "rows": [{"value": 1}],
+            "formatted": "模拟执行成功",
+        }
+
+    executor = StepExecutor(step_runner=fake_runner)
+    executor.execute_plan(plan)
+
+    assert "------------+" not in captured_questions[1]
+    assert '"rows": [{"month": "2026-04-01", "profit": -1886156}]' in captured_questions[1]
+
+
 def test_agent_returns_summary_after_execution():
     decomposition = sample_decomposition()
 
@@ -222,6 +258,54 @@ def test_agent_returns_business_report_after_execution():
         summarizer=ResultSummarizer(),
         report_generator=report_generator,
     )
+
+
+def test_agent_logs_main_chain_progress(capsys):
+    decomposition = sample_decomposition()
+
+    def fake_runner(question: str) -> dict:
+        return {
+            "success": True,
+            "sql": "SELECT 1",
+            "columns": ["value"],
+            "rows": [{"value": 1}],
+            "formatted": "模拟执行成功",
+        }
+
+    report_generator = ReportGenerator(
+        text_generator=lambda _system_msg, _prompt: """
+        {
+          "title": "利润下降分析报告",
+          "executive_summary": "利润下降主要来自收入回落。",
+          "key_findings": ["最近一个月利润明显走低。"],
+          "root_causes": ["收入下降快于成本下降。"],
+          "trend_judgment": "短期仍需跟踪。",
+          "action_suggestions": ["继续观察核心产品线订单恢复情况。"]
+        }
+        """
+    )
+
+    agent = PlanAndExecuteAgent(
+        planner=PlanGenerator(),
+        executor=StepExecutor(step_runner=fake_runner),
+        summarizer=ResultSummarizer(),
+        report_generator=report_generator,
+    )
+
+    agent.run(
+        "最近三个月利润为什么下降？",
+        decomposition_override=decomposition,
+    )
+
+    captured = capsys.readouterr()
+    stderr = captured.err
+
+    assert "开始生成执行计划" in stderr
+    assert "开始执行计划，共 3 个步骤" in stderr
+    assert "开始执行 step_1" in stderr
+    assert "step_3 执行完成" in stderr
+    assert "开始生成执行摘要" in stderr
+    assert "开始生成分析报告" in stderr
 
     result = agent.run(
         "最近三个月利润为什么下降？",
@@ -395,4 +479,4 @@ def test_step_executor_can_load_rows_from_temp_table_reference():
 
     assert results[0].result_reference == "temp_table://tmp_agent_step_1"
     assert loaded_rows == [{"month": "2026-05", "profit": 920000}]
-    assert '{"month": "2026-05", "profit": 920000}' in captured_questions[1]
+    assert '"rows": [{"month": "2026-05", "profit": 920000}]' in captured_questions[1]

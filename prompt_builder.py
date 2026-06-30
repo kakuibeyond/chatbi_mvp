@@ -76,6 +76,21 @@ SQL：SELECT c.customer_type, COUNT(*) AS order_count FROM sales_orders o JOIN d
 示例3：
 问题：查询2026年第一季度的总费用
 SQL：SELECT SUM(rd_expense + selling_expense + admin_expense + finance_expense) AS total_expense FROM finance_expenses WHERE expense_date >= '2026-01-01' AND expense_date < '2026-04-01';
+
+示例4：
+问题：查看最近三个月各月销售收入
+SQL：SELECT
+    DATE_FORMAT(o.order_date, '%Y-%m-01') AS month,
+    SUM(o.net_amount * r.rate_to_cny) AS revenue_cny
+FROM sales_orders o
+JOIN exchange_rates r
+  ON o.order_date = r.rate_date
+ AND o.currency = r.currency
+WHERE o.order_status = 'completed'
+  AND o.order_date >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+  AND o.order_date < CURDATE() + INTERVAL 1 DAY
+GROUP BY DATE_FORMAT(o.order_date, '%Y-%m-01')
+ORDER BY month;
 """
 
 
@@ -89,6 +104,7 @@ RULES = """
 5. 时间范围："最近N个月"使用 DATE_SUB(CURDATE(), INTERVAL N MONTH) 作为起始边界；"本月"指当月1日至当前日期
 6. 费用层级：selling_expense 是销售费用总项，包含 marketing_expense、logistics_expense、warranty_expense，汇总时不得重复计算
 7. 毛利计算：毛利 = net_amount - (material_cost + labor_cost) * quantity
+8. 不要引用 Schema 中不存在的字段，例如 channel
 """
 
 
@@ -98,8 +114,9 @@ ERROR_GUARDS = """
 - 字段选择：确认金额字段是 net_amount（不含税）还是 gross_amount（含税），除非明确要求"含税"，否则一律用 net_amount
 - Join 遗漏：只要查询涉及"收入"且存在 currency 字段，必须关联 exchange_rates 表做汇率转换
 - 过滤遗漏：所有收入类统计必须包含 WHERE order_status = 'completed'
-- 时间边界：使用 >= 和 < 组合表示闭开区间，避免跨月/跨年边界误差
+- 时间边界：使用 >= 和 < 组合表示闭开区间；“最近N个月”按 DATE_SUB(CURDATE(), INTERVAL N MONTH) 处理
 - 聚合维度：GROUP BY 字段必须与 SELECT 中的非聚合字段完全一致
+- 字段合法性：不要输出 Schema 中不存在的字段；如果问题里出现未建模维度，优先回退到产品线、区域、客户、月份等已有维度
 """
 
 
@@ -178,9 +195,10 @@ def build_prompt(
 4. 如果涉及多表查询，使用 JOIN 连接
 5. 收入口径统一使用 net_amount，成本口径使用 material_cost + labor_cost
 6. 统计销售额时，需要按订单日期的汇率转换为人民币
+7. SQL 必须完整闭合，CTE、SELECT、GROUP BY、ORDER BY 不得省略，不要输出截断的半句 SQL
 """
     if use_rules or use_guards:
-        prompt += """7. 优先遵循【关键业务规则】和【常见错误防护】中的约束
+        prompt += """8. 优先遵循【关键业务规则】和【常见错误防护】中的约束
 """
 
     prompt += """

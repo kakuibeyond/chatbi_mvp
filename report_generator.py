@@ -182,11 +182,25 @@ class ReportGenerator:
     @staticmethod
     def _pick_step_brief(step_result: dict[str, Any]) -> str:
         formatted = (step_result.get("formatted") or "").strip()
-        if formatted:
+        if formatted and not ReportGenerator._looks_like_table(formatted):
             return formatted.splitlines()[0][:120]
         rows = step_result.get("rows") or []
         if rows:
-            return json.dumps(rows[0], ensure_ascii=False, default=ReportGenerator._json_default)
+            row = rows[0]
+            parts = [
+                f"{key}={value}"
+                for key, value in row.items()
+                if value is not None
+            ]
+            return "，".join(parts[:4])[:120]
+        if formatted:
+            for line in formatted.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if set(stripped) <= {"-", "+"}:
+                    continue
+                return stripped[:120]
         error = step_result.get("error")
         if error:
             return f"执行失败：{error}"
@@ -219,6 +233,11 @@ class ReportGenerator:
         if isinstance(value, Decimal):
             return str(value)
         return str(value)
+
+    @staticmethod
+    def _looks_like_table(formatted: str) -> bool:
+        text = formatted.strip()
+        return "+" in text and "|" in text
 
     @staticmethod
     def _build_default_text_generator() -> ReportTextGenerator | None:
